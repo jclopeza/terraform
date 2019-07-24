@@ -180,3 +180,32 @@ Para eso, tenemos que quedarnos con el nombre del SG, en este caso es `aws_secur
 vpc_security_group_ids = ["${aws_security_group.allow_ssh_anywhere.id}"]
 ```
 Tenemos que darnos cuenta que aquí hemos utilizado el **atributo** `id`. Estos atributos están en la documentación de los SG (y de cualquier otro recurso).
+
+### Creación de un nuevo key_pair
+Se trataría de crear un nuevo fichero `keypair.tf` con el siguiente contenido:
+```
+resource "aws_key_pair" "jcla_dell" {
+  key_name   = "terraform-test-keypair"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAA..."
+}
+```
+Y para que esta clave sea utilizada por nuestra instancia, se trataría de incluir la siguiente línea en el fichero `instance.tf`
+```
+key_name = "${aws_key_pair.jcla_dell.key_name}"
+```
+## Outputs, cómo obtener información de los recursos creados por Terraform
+Por ejemplo, vamos a extraer la publi_ip de la instancia que estamos creando. Creamos un fichero `outputs.tf` con el contenido
+```
+output "instance_public_ip" {
+  value = "${aws_instance.web.public_ip}"
+}
+```
+Con el comando
+```
+terraform output
+```
+obtendríamos el resultado de la public_ip.
+```
+instance_public_ip = 52.54.138.95
+```
+El nombre de la variable de salida es aleatorio, podemos utilizar el que queramos.
