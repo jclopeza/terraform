@@ -1,10 +1,13 @@
 resource "aws_instance" "web" {
-  ami           = "ami-026c8acd92718196b"
-  instance_type = "t3.micro"
+  ami           = "${var.ami_id}"
+  instance_type = "${var.instance_type}"
   key_name = "${aws_key_pair.jcla_dell.key_name}"
-  vpc_security_group_ids = ["${aws_security_group.allow_ssh_anywhere.id}"]
-
+  vpc_security_group_ids = [
+      "${aws_security_group.allow_ssh_anywhere.id}",
+      "${aws_security_group.allow_http_anywhere.id}"
+    ]
+  user_data = "${file("user-data.txt")}"
   tags = {
-    Name = "test-terraform"
+    Name = "${var.project_name}-instance"
   }
 }

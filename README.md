@@ -209,3 +209,151 @@ obtendríamos el resultado de la public_ip.
 instance_public_ip = 52.54.138.95
 ```
 El nombre de la variable de salida es aleatorio, podemos utilizar el que queramos.
+
+## Creación de una Elastic IP
+Creamos un fichero de nombre `eip.tf` con el siguiente contenido.
+```
+resource "aws_eip" "web_eip" {
+  instance = "${aws_instance.web.id}"
+}
+```
+Ya no me interesa el valor *aws_instance.web.public_ip* que definimos en el fichero `outputs.ts` porque esa ip pública se sustituirá por la elastic IP. Por tanto modificamos el fichero `outputs.tf` con el siguiente contenido:
+```
+output "instance_public_ip" {
+  value = "${aws_eip.web_eip.public_ip}"
+}
+output "instance_public_dns" {
+  value = "${aws_eip.web_eip.public_dns}"
+}
+```
+Ahora también mostramos el DNS público además de la IP pública.
+
+## Variables
+
+### Definición de variables
+Creamos el fichero `variables.tf` con el siguiente contenido:
+```
+variable "project_name" {
+  type = "string"
+}
+```
+Si ahora ejecutamos `terraform plan` nos preguntará por el valor de la variable porque no la hemos definido.
+
+También podemos evitar poner el tipo de variable de la siguiente forma:
+```
+variable "project_name" {}
+```
+
+
+### Utilización de variables
+Por ejemplo, vamos al fichero `sg.tf` y decidimos que el nombre del SG fuera:
+```
+name        = "${var.project_name}-allow_ssh_anywhere"
+```
+Es muy útil cuando estamos reutilizando código. Hacemos lo mismo en el tag de la instancia.
+
+### Fijación de variables
+Creamos un fichero de nombre `terraform.tfvars` con el contenido:
+```
+project_name = "Calculadora"
+```
+
+### Llevamos el VPC id, el AMI id y el tipo de instancia a nuestras variables
+El fichero `variables.tf` quedaría:
+```
+variable "project_name" {}
+variable "vpc_id" {}
+variable "ami_id" {}
+variable "instance_type" {}
+```
+Y el fichero `terraform.tfvars` así:
+```
+project_name = "Calculadora"
+vpc_id = "vpc-983f84e1"
+ami_id = "ami-026c8acd92718196b"
+instance_type = "t3.micro"
+```
+
+## Creación de *user data*
+Con esto podremos provisionar nuestra máquina creada en cloud. Creamos un fichero de nombre `user-data.txt` con el siguiente contenido.
+```
+#!/bin/bash
+sudo apt-get update -y
+sudo apt-get install apache2 -y
+echo "hola mundo" | sudo tee /var/www/html/index.html
+```
+Ahora tenemos que incluir este fichero en el *user data*. Modificamos el fichero `instance.tf` que quedaría de la siguiente forma (con el nuevo campo **user_data**):
+```
+resource "aws_instance" "web" {
+  ami           = "${var.ami_id}"
+  instance_type = "${var.instance_type}"
+  key_name = "${aws_key_pair.jcla_dell.key_name}"
+  vpc_security_group_ids = ["${aws_security_group.allow_ssh_anywhere.id}"]
+  user_data = "${file("user-data.txt")}"
+  tags = {
+    Name = "${var.project_name}-instance"
+  }
+}
+```
+Hemos instalado apache, ahora tendríamos que:
+1. modificar el SG para permitir acceso al puerto 80.
+2. modificar la instancia para asociarle el nuevo SG que hemos creado.
+
+Nuestro fichero `sg.tf` quedaría así:
+```
+resource "aws_security_group" "allow_ssh_anywhere" {
+  name        = "${var.project_name}-allow_ssh_anywhere"
+  description = "Allow all inbound traffic to ssh"
+  vpc_id      = "${var.vpc_id}"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "allow_http_anywhere" {
+  name        = "${var.project_name}-allow_http_anywhere"
+  description = "Allow all inbound traffic to http"
+  vpc_id      = "${var.vpc_id}"
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
+  }
+}
+```
+Y el fichero `instance.tf` quedaría así:
+```
+resource "aws_instance" "web" {
+  ami           = "${var.ami_id}"
+  instance_type = "${var.instance_type}"
+  key_name = "${aws_key_pair.jcla_dell.key_name}"
+  vpc_security_group_ids = [
+      "${aws_security_group.allow_ssh_anywhere.id}",
+      "${aws_security_group.allow_http_anywhere.id}"
+    ]
+  user_data = "${file("user-data.txt")}"
+  tags = {
+    Name = "${var.project_name}-instance"
+  }
+}
+```
