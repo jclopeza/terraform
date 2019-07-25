@@ -1,5 +1,5 @@
 resource "aws_instance" "web" {
-  ami           = "${var.ami_id}"
+  ami           = "${data.aws_ami.ubuntu.image_id}"
   instance_type = "${var.instance_type}"
   key_name = "${aws_key_pair.jcla_dell.key_name}"
   vpc_security_group_ids = [

@@ -357,3 +357,52 @@ resource "aws_instance" "web" {
   }
 }
 ```
+
+## Simplificando la configuración con los DataSources
+Los DataSources nos permiten acceder a recursos de AWS que ya estén creados previamente, o a recursos que no dependen de nosotros como las AMIs, etc. Por ejemplo, vamos a obtener el AMI a utilizar por nuestra instancia EC2 utilizando DataSources.
+
+Creamos un nuevo fichero de nombre `data.tf` con el siguiente contenido que lo que haría sería consultar las AMIs de AWS (le vamos a llamar *ubuntu* a ésta) y va a aplicar una serie de filtros.
+```
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+```
+Por tanto ya no necesitaríamos el valor `ami_id = "ami-026c8acd92718196b"` que definimos en el fichero `terraform.tfvars` ni la variable `variable "ami_id" {}` que definimos en `variables.tf`. Y en el fichero `instance.tf` tendríamos que cambiar
+```
+ami           = "${var.ami_id}"
+```
+por
+```
+ami           = "${data.aws_ami.ubuntu.image_id}"
+```
+El campo `image_id` es uno de los atributos del *datasource* aws_ami.
+
+Vamos a hacer lo mismo para eliminar la variable vpc_id de nuestros ficheros `variables.tf` y `terraform.tfvars`. Para ello creamos un nuevo datasource en el mismo fichero `data.tf` con el siguiente contenido.
+```
+data "aws_vpc" "selected" {
+  default = true
+}
+```
+Si vemos la documentación, en los argumentos nos permite indicar si queremos la VPC por defecto. Para utilizar este nuevo datasource, tendríamos que actualizar el fichero `sg.tf` y cambiar:
+```
+  vpc_id      = "${var.vpc_id}"
+```
+por
+```
+  vpc_id      = "${data.aws_vpc.selected.id}"
+```
+
+## Launch configurations y autoscaling groups
+Creamos un nuevo
