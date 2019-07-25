@@ -641,3 +641,39 @@ echo "Nombre de la instancia EC2 = $instance_id" | sudo tee /var/www/html/index.
 
 ## Ficheros de estado
 ¿Cómo sabe Terraform el estado en que se encuentran los recursos en Amazon?, ¿cómo monitoriza los cambios y mantiene el estado?
+
+### terraform.tfstate
+Es el fichero de estado de terraform. Tiene estructura json y mantiene un registro de todos los cambios que Terraform ha hecho en la infraestructura. **Es el fichero en el que se va apoyar para comparar el estado actual de la infraestructura con el estado de la infraestructura real en Amazon**.
+
+### Remote state
+Es posible almacenar el estado en localizaciones remotas. Por ejemplo, en buckets S3. Para ello, creamos el fichero de nombre `remote_state.tf` con el siguiente contenido:
+```
+terraform {
+  backend "s3" {
+    bucket = "vcc-terraform-bucket"
+    key = "terraform/states/web_intance.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+Esto escribirá en un bucket de S3 el estado de Terraform. Es una forma muy buena si se está trabajando en equipo y hay varias personas modificando recursos en Amazon.
+
+En local, dentro del directorio `.terraform` existirá un fichero `terraform.tfstate` pero lo único que contendrá será la referencia al bucket de S3 dondé está el fichero válido.
+
+Pero esto plantea un nuevo problema, y es el que dos usuarios estén modificando a la vez recursos en AWS. Para esto están los **locks**.
+
+### Locks
+El locking se hace a través de una tabla que necesitamos crear en DynamoDB. Con esto podremos activar el locking en nuestro Bucket de S3. Tendríamos que:
+
+1. Crear una tabla en DynamoDB en AWS. La tabla tiene que tener un atributo de nombre "LockID".
+2. Incluir una nueva línea en el fichero `remote_state.tf` indicando la tabla que hemos creado en DynamoDB:
+```
+terraform {
+  backend "s3" {
+    bucket = "vcc-terraform-bucket"
+    key = "terraform/states/web_intance.tfstate"
+    region = "us-east-1"
+    dynamodb_table = "TerraformLock"
+  }
+}
+```
