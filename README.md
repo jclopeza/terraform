@@ -405,4 +405,112 @@ por
 ```
 
 ## Launch configurations y autoscaling groups
-Creamos un nuevo
+Movemos todo el contenido al directorio `instancia_web` y duplicamos todo a una nueva carpeta `instancias_web_con_asg_y_elb`. Vamos a modificar el código para poder implementar un *launch configuration* y un *autoscaling group*. Esto no va a permitir que el *autoscaling group* lance una serie de instancias (que las definimos en el *launch configuration*).
+
+### Creación del launch configuration
+1. Eliminamos el fichero `instance.tf`, no lo necesitamos.
+2. Eliminamos el fichero `eip.tf`, no lo necesitamos.
+3. Eliminamos el fichero `outputs.tf`, no lo necesitamos.
+4. Creamos el nuevo fichero `lc.tf` con el siguiente contenido.
+```
+resource "aws_launch_configuration" "web" {
+  name_prefix          = "${var.project_name}-lc_" // Más versátil que name
+  image_id      = "${data.aws_ami.ubuntu.id}"
+  instance_type = "${var.instance_type}"
+  key_name      = "${aws_key_pair.jcla_dell.key_name}"
+  security_groups = [
+    "${aws_security_group.allow_ssh_anywhere.id}",
+    "${aws_security_group.allow_http_anywhere.id}"
+    ]
+  user_data = "${file("user-data.txt")}"
+  // Aquí no necesitamos los tags ya que se indican directamente en el autoscaling group
+}
+```
+### Creación del autoscaling group
+Creamos el fichero `asg.tf` con el siguiente contenido:
+```
+resource "aws_autoscaling_group" "web" {
+  name                      = "${var.project_name}-web"
+  max_size                  = 2
+  min_size                  = 0
+  desired_capacity          = 0
+  launch_configuration      = "${aws_launch_configuration.web.name}"
+  // Aqui indicamos la subnet. Las ponemos fijas pero luego utilizaremos un datasource
+  vpc_zone_identifier       = ["subnet-064ff72a", "subnet-0caf2300", "subnet-4b69d911"]
+  tag {
+    key                 = "Name"
+    value               = "${var.project_name}-web-asg"
+    propagate_at_launch = true // Con esto indicamos que el tag se ponga también en las instancias que se crean
+  }
+}
+```
+Esto no creará ninguna instancia porque `desired_capacity = 0`, pero aunque pongamos que queremos 2 instancias, no servirá de nada porque:
+* las ip's son dinámicas
+* las dos instancias están separadas
+
+Necesitamos por tanto un **balanceador de carga** con una IP fija y que las instancias se auto-registren en ese balanceador a medida que se crean y que se eliminen del balanceador a medida que se destruyan.
+
+### Creación del balanceador de carga
+Primero modificamos el `user-data.txt` para incluir el id de la instancia EC2 en el index.html. Para ello incluímos la siguiente línea (con este endpoint tenemos acceso a muchos meta-datos de la instancia):
+```
+instance_id=$(curl -s 169.254.169.254/latest/meta-data/instance-id)
+```
+Y tendremos el `user-data.txt` como sigue:
+```
+#!/bin/bash
+sudo apt-get update -y
+sudo apt-get install apache2 -y
+instance_id=$(curl -s 169.254.169.254/latest/meta-data/instance-id)
+echo "Nombre de la instancia EC2 = $instance_id" | sudo tee /var/www/html/index.html
+```
+Ahora si intentamos aplicar los cambios, tendrá que eliminar y crear un *launch configuration*. Esto nos dará error porque ya está asociado a un *autoscaling group*. Esto lo solucionamos incluyendo las líneas
+```
+  lifecycle {
+      create_before_destroy = true
+  }
+```
+en el fichero `lc.tf`. Esto creará el nuevo *launch configuration*, lo asociará al *autoscaling group* y finalmente se borrará el antiguo *launch configuration*.
+
+Ahora configuramos propiamente el **load balancer**. Creamos el fichero `elb.tf` con el siguiente contenido.
+```
+resource "aws_elb" "web" {
+  name                = "${var.project_name}-elb-web"
+  subnets             = ["subnet-064ff72a", "subnet-0caf2300", "subnet-4b69d911"]
+
+  listener {
+    instance_port     = 80
+    instance_protocol = "http"
+    lb_port           = 80
+    lb_protocol       = "http"
+  }
+
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 5
+    timeout             = 2
+    target              = "HTTP:80/"
+    interval            = 10
+  }
+
+  tags = {
+    Name = "${var.project_name}-elb-web"
+  }
+}
+```
+Pero aún no está listo. Aún falta configurar el *security group* que va a utilizar este ELB como el attach de las instancias a través del *autoscaling group*. Podemos utilizar el mismo que definimos antes, por tanto bastaría añadir la siguiente línea al fichero `elb.tf`:
+```
+security_groups = ["${aws_security_group.allow_http_anywhere.id}"] //No aplicamos el SG ssh
+```
+Sólo nos queda asociar las instancias al ELB. Editamos el fichero `asg.tf` e inluímos la línea *load_balancers* como sigue:
+```
+load_balancers            = ["${aws_elb.web.name}"]
+```
+
+### Health checks para los autoscaling groups
+El tipo de chequeo que hace el *autoscaling group* es te dipo EC2. Verifica que la instancia está arriba y que se llega a ella. Puede que apache esté caído y eso no es ningún problema para el *autoscaling group*. Lo que queremos hacer es que el *autoscaling group* haga los mismos chequeos que el ELB. Si apache está caído, que el *autoscaling group* cree una nueva instancia y de por finalizada la otra.
+
+Para ello, modificamos el fichero `asg.tf` e incluímos la siguiente línea:
+```
+health_check_type         = "ELB"
+```
+A partir de ahora, el *autoscaling group* se apoyará en los chequeos del balanceador de carga para determinar si crea o no una nueva instancia EC2.

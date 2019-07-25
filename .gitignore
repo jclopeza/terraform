@@ -2,3 +2,4 @@
 provider.tf
 terraform.tfstate
 terraform.tfstate.backup
+instancias_web_con_asg_y_elb/.terraform.tfstate.lock.info
