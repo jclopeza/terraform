@@ -7,7 +7,7 @@ resource "aws_launch_configuration" "web" {
     "${aws_security_group.allow_ssh_anywhere.id}",
     "${aws_security_group.allow_http_anywhere.id}"
     ]
-  user_data = "${file("user-data.txt")}"
+  user_data = "${data.template_file.user-data.rendered}"
   // Aquí no necesitamos los tags ya que se indican directamente en el autoscaling group
   lifecycle {
       create_before_destroy = true

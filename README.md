@@ -514,3 +514,130 @@ Para ello, modificamos el fichero `asg.tf` e incluímos la siguiente línea:
 health_check_type         = "ELB"
 ```
 A partir de ahora, el *autoscaling group* se apoyará en los chequeos del balanceador de carga para determinar si crea o no una nueva instancia EC2.
+
+## DataSources
+Vamos a mejorar el ejemplo anterior y vamos a obtener las subredes o subnets con datasources. Para eso modificamos el fichero `data.tf` e incluimos nuevas líneas para que se recuperen **todas las subnets** asociadas a una determinada VPC.
+```
+data "aws_subnet_ids" "selected" {
+  vpc_id = "${data.aws_vpc.selected.id}"
+}
+```
+Ya podemos modificar el fichero `elb.tf` y sustituir la línea
+```
+subnets             = ["subnet-064ff72a", "subnet-0caf2300", "subnet-4b69d911"]
+```
+por esta otra
+```
+subnets             = "${data.aws_subnet_ids.selected.ids}"
+```
+Y hacer también la sustitución en el fichero `asg.tf` y sustituir la línea
+```
+vpc_zone_identifier       = ["subnet-064ff72a", "subnet-0caf2300", "subnet-4b69d911"]
+```
+por esta otra
+```
+vpc_zone_identifier       = "${data.aws_subnet_ids.selected.ids}"
+```
+
+## Terraform console
+Con `terreform console` tenemos acceso a una consola en la que podemos ver el valor de variables, debugear, etc. Ejemplo:
+```
+> var.project_name
+calculadora
+> data.aws_subnet_ids.selected.ids
+[
+  "subnet-064ff72a",
+  "subnet-0caf2300",
+  "subnet-4b69d911",
+  "subnet-691e2c55",
+  "subnet-a7a8bfc2",
+  "subnet-fbcbbab3",
+]
+>
+```
+
+## Interpolation syntax
+Documentado aquí: https://www.terraform.io/docs/configuration-0-11/interpolation.html
+
+Echar un vistazo a las *built-in functions*. Podemos buscar contenido en listas, etc. Luego podrá usarse con los condicionales.
+
+## Templates
+Terraform tiene embebido un motor de templates. Será muy útil cuando creemos módulos. Veamos cómo funcionan. Primero creamos el fichero `template.tf` con el siguiente contenido.
+```
+data "template_file" "user-data" {
+  template = "${file("template.tpl")}"
+  vars = {
+    test_var = "test_value"
+  }
+}
+```
+Ahora creamos el fichero `template.tpl` con:
+```
+Hola mundo esto es una prueba
+```
+Si hacemos `terraform plan` fallará porque es necesario descargar el plugin para las templates. Se soluciona con `terraform init`. Vamos a usar este template para generar la salida. Creamos por tanto el fichero `output.tf` con el siguiente contenido:
+```
+output "template_rendered" {
+    value = "${data.template_file.user-data.rendered}"
+}
+```
+Con esto tendremos como salida el contenido de la template renderizada. Ahora, ¿cómo accedemos al valor de nuestras variables desde la template? Muy fácil, basta referenciarlas de la siguiente forma:
+```
+variable test_var = ${test_var}
+```
+No es necesario utilizar `var.name` como hacíamos antes. Se puede acceder de forma directa si hemos definido las variables dentro del `template_file`.
+
+### Pasar a las templates variables que existen en el sistema
+Y si queremos pasar el `project_name` a la template?. Muy fácil, tendríamos que modificar el fichero template.tf que quedaría del siguiente modo:
+```
+data "template_file" "user-data" {
+  template = "${file("template.tpl")}"
+  vars = {
+    test_var = "test_value"
+    project_name = "${var.project_name}"
+  }
+}
+```
+De esta forma tendríamos disponible la variable `project_name` lista para poder utilizar en nuestros templates. Esto se verá en detalle con los módulos.
+
+### User data como template
+Modificamos el fichero template.tf, eliminamos las variables y tomamos como template el user-data.txt. Quedaría así:
+```
+data "template_file" "user-data" {
+  template = "${file("user-data.txt")}"
+  vars = {
+  }
+}
+```
+El siguiente paso sería usar la template renderizada en el *launch configuration*. Para ello modificamos el fichero `lc.tf` y en el campo `user_data` indicamos que utilice la template en lugar del fichero `user-data.txt`. Cambiaríamos la línea
+```
+user_data = "${file("user-data.txt")}"
+```
+por
+```
+user_data = "${data.template_file.user-data.rendered}"
+```
+Eliminamos ahora los ficheros template.tpl y output.tf, no los vamos a necesitar más.
+
+Vamos a pasar al `user-data.txt` el *project_name* como variable. El fichero template.tf quedaría así:
+```
+data "template_file" "user-data" {
+  template = "${file("user-data.txt")}"
+  vars = {
+      project_name = "${var.project_name}"
+  }
+}
+```
+Y en el `user-data.txt` hacemos uso de esa variable:
+```
+#!/bin/bash
+
+# Este es el user data para el proyecto ${project_name}
+sudo apt-get update -y
+sudo apt-get install apache2 -y
+instance_id=$(curl -s 169.254.169.254/latest/meta-data/instance-id)
+echo "Nombre de la instancia EC2 = $instance_id" | sudo tee /var/www/html/index.html
+```
+
+## Ficheros de estado
+¿Cómo sabe Terraform el estado en que se encuentran los recursos en Amazon?, ¿cómo monitoriza los cambios y mantiene el estado?

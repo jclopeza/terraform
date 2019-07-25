@@ -1,6 +1,6 @@
 resource "aws_elb" "web" {
   name                = "${var.project_name}-elb-web"
-  subnets             = ["subnet-064ff72a", "subnet-0caf2300", "subnet-4b69d911"]
+  subnets             = "${data.aws_subnet_ids.selected.ids}"
 
   security_groups = ["${aws_security_group.allow_http_anywhere.id}"] //No aplicamos el SG ssh
 
