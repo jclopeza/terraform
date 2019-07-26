@@ -906,4 +906,26 @@ output "connection_string" {
     value = "ssh ubuntu@${module.ec2.eip}"
 }
 ```
-Podremos utilizar varios módulos en un fichero y **podremos utilizar los outputs de un módulo como inputs de otro**.
+Podremos utilizar varios módulos en un fichero y **podremos utilizar los outputs de un módulo como inputs de otro**. Por ejemplo, un módulo crea una VPC y devuelve el ID como output, y podemos utilizarlo en otro módulo.
+
+### Almacenar nuestros módulos en repositorios Git
+Esto, además, nos permitirá trabajar con distintas versiones de nuestros módulos, algo que es muy interesante.
+
+Lo único que tenemos que hacer es cambiar:
+```
+source = "/home/jcla/Projects/desarrollo/Terraform/modulos/ec2-with-eip"
+```
+por
+```
+source = "github.com/jclopeza/terraform-module-ec2-with-eip"
+```
+En este caso, `terraform init` se va a descargar el código del repositorio Git. Esto implica que la máquina donde se ejecute terraform tiene que tener instalado git.
+
+Ahora veamos cómo hacer un cambio en un módulo alojado en Git. Ojo, si hacemos `terraform init` ya no se descargará el módulo porque ya está descargado. La forma de solucionar esto es mediante los `tags` y `releases` en git. Lo único que tendremos que hacer será cambiar:
+```
+source = "github.com/jclopeza/terraform-module-ec2-with-eip"
+```
+por
+```
+source = "github.com/jclopeza/terraform-module-ec2-with-eip?ref=v1.0.1"
+```
