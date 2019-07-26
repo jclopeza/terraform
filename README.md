@@ -140,6 +140,56 @@ Para eliminar todos los recursos definidos, ejecutaríamos ...
 terraform destroy
 ```
 
+### validate
+Para validar que los ficheros están bien construídos.
+
+### fmt
+Para formatear los ficheros (espacios, identación, ...). Suele utilizarse antes de subirse a git.
+
+### graph
+Para creación de gráficos:
+```
+terraform graph | dot -Tsvg > /tmp/graph.svg
+```
+
+### import
+Permite que recursos que estén creados a mano puedan ser importados por terraform. Para pequeñas cosas.
+
+### refresh
+Actualiza el estado `terraform.tfsate` con el código de los ficheros tf.
+
+### show
+Veremos todos los atributos disponibles de los recursos. Es una forma fácil de ver los atributos que tenemos disponibles para los outputs.
+
+### workspace
+Se trata de poder tener el mismo código pero con distintos estados.
+
+Para crear un nuevo workspace
+```
+terraform workspace new testing
+```
+Esto creará el directorio `terraform.tfstate.d/testing`
+
+Para listar los workspaces disponibles
+```
+terraform workspace list
+```
+
+Para seleccionar un workspace distinto
+```
+terraform workspace select testing
+```
+
+Es posible acceder al workspace desde las templates tf de la siguiente forma, por ejemplo:
+```
+project_name = "${var.project_name}-${terraform.workspace}"
+```
+
+Probablemente querramos utilizar distintas variables para los distintos entornos/workspaces. Se puede hacer de la siguiente forma:
+```
+instance_type = "${terraform.workspace == "production" ? "t2.large": "t2.micro"}"
+```
+
 ## Creación de recursos necesarios desde Terraform
 Antes tuvimos que crear a mano los recursos necesarios para nuestra instancia como el **security group** o el **key pair**. Ahora veremos cómo crear esos recursos directamente desde Terraform.
 
@@ -677,3 +727,106 @@ terraform {
   }
 }
 ```
+
+## Acceder a outputs de otros proyectos
+Esto será fundamental cuando trabajemos con módulos. Suponemos que tenemos dos proyectos, proyecto1 y proyecto2. Cada uno con su *remote state*.
+
+Dentro de proyecto1 creamos los siguientes ficheros y el siguiente contenido:
+* `provider.tf`
+```
+provider "aws" {
+  region     = "us-east-1"
+}
+```
+* `data.tf`
+```
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+```
+* `instance.tf`
+```
+resource "aws_instance" "web" {
+  ami           = "${data.aws_ami.ubuntu.id}"
+  instance_type = "t2.micro"
+
+  tags = {
+    Name = "HelloWorld"
+  }
+}
+```
+* `eip.tf`
+```
+resource "aws_eip" "web" {
+  instance = "${aws_instance.web.id}"
+}
+```
+* `remote_state.tf`
+```
+terraform {
+  backend "s3" {
+    bucket = "jcla"
+    key = "terraform/proyecto1.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+Luego ejecutamos `terraform init` y `terraform apply`. Ahora creamos un fichero `output.tf` con el siguiente contenido:
+```
+output "web_public_ip" {
+    value = "${aws_eip.web.public_ip}"
+}
+```
+
+**Ahora, ¿cómo accedemos a esas variables que se definen en el fichero `output.tf` desde otro fichero?**
+Dentro de proyecto2 creamos los siguientes ficheros y el siguiente contenido:
+* `provider.tf`
+```
+provider "aws" {
+  region     = "us-east-1"
+}
+```
+* `remote_state.tf`
+```
+terraform {
+  backend "s3" {
+    bucket = "jcla"
+    key = "terraform/proyecto2.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+Con `terraform init` iniciamos los plugins, el provider, etc. En este proyecto2 podemos crear una instancia con un SG que abra el acceso a la IP que tenemos en el output del otro proyecto. O por ejemplo crear un registro DNS donde apuntáramos a un record concreto a la IP del proyecto1.
+
+Tenemos que acceder al fichero de estado del otro proyecto. Tenemos que utilizar un datasource que nos va a permitir acceder a un remote state. Primero creamos un fichero de nombre `data.tf` donde indicamos dónde se encuentra el fichero de estado remoto.
+```
+data "terraform_remote_state" "proyecto1" {
+  backend = "s3"
+  config = {
+    bucket = "jcla"
+    key    = "terraform/proyecto1.tfstate"
+    region = "us-east-1"
+  }
+}
+```
+**Esto último nos crearía un datasource y vamos a poder acceder a todos los outputs del proyecto1** de la misma forma que accedemos a cualquier otro datasource.
+
+Para ver la salida, creamos por ejemplo un nuevo fichero de nombre `output.tf` para recoger los datos del estado remoto de otro proyecto.
+```
+output "web_public_ip_proyecto1" {
+    value = "${data.terraform_remote_state.proyecto1.outputs.web_public_ip}"
+}
+```
+Casos de uso. Imaginamos que hay muchos working directories porque los organizamos por aplicación, funcionalidad o lo que sea. Uno para la aplicación de login, otro para la aplicación que permite a los usuarios acceder a tal, ... Y luego queremos centralizar la gestión DNS en un proyecto concreto. Este proyecto podría acceder a todos los outputs de los demás proyectos para obtener las IPs, las de los balanceadores de carga.
