@@ -830,3 +830,80 @@ output "web_public_ip_proyecto1" {
 }
 ```
 Casos de uso. Imaginamos que hay muchos working directories porque los organizamos por aplicación, funcionalidad o lo que sea. Uno para la aplicación de login, otro para la aplicación que permite a los usuarios acceder a tal, ... Y luego queremos centralizar la gestión DNS en un proyecto concreto. Este proyecto podría acceder a todos los outputs de los demás proyectos para obtener las IPs, las de los balanceadores de carga.
+
+## Módulos
+Nos van a permitir encapsular varios recursos. El objetivo es la reutilización de código. Como SG, elastic ip, etc ... Imaginamos que tenemos 3 entornos. Serán *working directories* y cada uno tendrá el código necesario para crear el entorno. Si no usásemos módulos, tendríamos que repetir todo el código. Si hay que corregir un error, habría que hacerlo en dos sitios ... **no es mantenible**.
+
+Para crear un módulo primero creamos un directorio, por ejemplo, `ec2-with-eip`. Los ficheros que van dentro de un módulo son iguales, pero la diferencia es que los módulos van a tener **input** y **outputs**. Por ejemplo, vamos a usar un `security group`.
+
+Creamos un fichero sg.tf con el siguiente contenido. **Definimos una serie de variables**.
+```
+resource "aws_security_group" "allow_all" {
+  name        = "${var.sg_name}"
+  description = "SG ${var.sg_name}"
+  vpc_id      = "${var.vpc_id}"
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
+  }
+}
+```
+
+Ahora creamos un fichero de variables de nombre `inputs.tf` **que van a ser los inputs** con el siguiente contenido:
+```
+variable "sg_name" {}
+variable "vpd_id" {}
+```
+Cuando invoquemos al módulo, tendremos que pasar unos **inputs** que serán valores para las variables que acabamos de definir. A su vez, este módulo podrá tener **outputs**. Creamos un fichero `outputs.tf` con el siguiente contenido.
+
+### ¿Cómo utilizaríamos este módulo?
+Creamos dos directorios, `testing` y `produccion`. Dentro del directorio `testing`, por ejemplo, necesitamos como mímino:
+1. Crear un `provider.tf`
+2. Un fichero donde invoquemos el módulo de nombre `ec2.tf` con el siguiente contenido.
+```
+module "ec2" {
+    // Lo mínimo que necesitamos es la ruta donde estoy guardando el módulo
+    source = "/home/jcla/Projects/desarrollo/Terraform/modulos/ec2-with-eip"
+    // Como el módulo tiene inputs, tenemos que incluirlos ahora
+    sg_name = "ec2-testing"
+    vpc_id = "vpc-983f84e1"
+}
+```
+El siguiente paso sería ejecutar `terraform init`. Además de descargar el provider se descargaría el código asociado al módulo (de estar en un repositorio Git) o crearía un enlace (en caso de estar en local). Esta es la estructura de directorios que quedará tras la ejecución del `init`.
+```
+.
+├── ec2.tf
+├── provider.tf
+└── .terraform
+    ├── modules
+    │   ├── ec2 -> /home/jcla/Projects/desarrollo/Terraform/modulos/ec2-with-eip
+    │   └── modules.json
+    └── plugins
+        └── linux_amd64
+            ├── lock.json
+            └── terraform-provider-aws_v2.21.0_x4
+```
+Igual podríamos repetirlo para producción.
+
+### ¿Cómo solucionar errores en un módulo?
+Por ejemplo, cambiamos la descripción. Volvemos a hacer `terraform apply` y tendremos los cambios aplicados.
+
+### ¿Cómo usar los outputs de los módulos?
+Crearíamos un `output.tf` en nuestro proyecto (testing/producción) que hiciera referencia al output del módulo. Quedaría un fichero como el siguiente:
+```
+output "connection_string" {
+    // El valor que vamos a utilizar del módulo está en el outputs del módulo
+    value = "ssh ubuntu@${module.ec2.eip}"
+}
+```
+Podremos utilizar varios módulos en un fichero y **podremos utilizar los outputs de un módulo como inputs de otro**.
