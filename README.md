@@ -929,3 +929,84 @@ por
 ```
 source = "github.com/jclopeza/terraform-module-ec2-with-eip?ref=v1.0.1"
 ```
+
+### Terraform Module Registry
+Hay disponibles una serie de módulos en terraform. Se accede a ellos a través de https://registry.terraform.io. Aquí cualquiera puede subir módulos. Unos están verificados por Hasycorp y otros no.
+
+**Primero vamos a ver cómo pasar inputs a un módulo que los obtenemos de los outputs de otro módulo**.
+
+Creamos un nuevo directorio con el `provider.tf` y otro fichero que llamamos `main.tf` con el siguiente contenido:
+```
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+  version = "2.9.0" // También podríamos haber puesto source = "terraform-aws-modules/vpc/aws?ref=2.9.0"
+
+  name = "vpc-calculator"
+  cidr = "192.168.0.0/16"
+
+  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  private_subnets = ["192.168.1.0/24", "192.168.2.0/24", "192.168.3.0/24"]
+  public_subnets  = ["192.168.10.0/24", "192.168.20.0/24", "192.168.30.0/24"]
+
+  enable_nat_gateway = false // Las redes privadas no tendrán acceso a internet
+  enable_vpn_gateway = false
+
+  tags = {
+    Terraform = "true"
+    Environment = "dev"
+  }
+}
+```
+Con `terraform init` bajamos el provider y el código del módulo. Aplicamos y tendremos todos los recursos creados en AWS.
+
+Ahora vamos a crear una instancia EC2 pasándole en uno de sus parámetros el ID de la VPC que hemos creado anteriormente.
+```
+module "ec2" {
+    source = "github.com/jclopeza/terraform-module-ec2-with-eip?ref=v1.0.2"
+    vpc_id = "${module.vpc.vpc_id}"
+    project_name = "calculadora"
+    environment = "testing"
+    ami = "ami-07d0cf3af28718ef8"
+    instance_type = "t2.micro"
+    key_name = "jcla"
+}
+```
+Vemos que la `vpc_id` hace referencia al módulo anterior. Pero qué pasa con la **subnet**?. Vamos a tener que modificar nuestro módulo porque en él no especificamos ninguna subnet. Por tanto la instancia EC2 se desplegará en la subnet que esté marcada por defecto. Modificamos el módulo para que admita el `subnet_id` como parámetro. Una vez hecho, quedaría la llamada a nuestro módulo de la siguiente forma.
+```
+module "ec2" {
+    source = "github.com/jclopeza/terraform-module-ec2-with-eip?ref=v1.0.3"
+    vpc_id = "${module.vpc.vpc_id}"
+    project_name = "calculadora"
+    environment = "testing"
+    ami = "ami-07d0cf3af28718ef8"
+    instance_type = "t2.micro"
+    key_name = "jcla"
+    // Para obtener la subnet en la que desplegar la instancia EC2
+    // tendremos que utilizar el output public_subnets, que es una lista
+    // con los IDs de las subnets públicas
+    subnet_id = "${module.vpc.public_subnets[0]}" // Obtenemos la primera subnet publica
+    // Aqui tambien podríamos haber utilizado una función de interpolación
+    // subnet_id = "${element(module.vpc.public_subnets,0)}"
+}
+```
+Por tanto, **hemos visto cómo pasar inputs a un módulo obteniéndolos de los outputs de otro módulo**.
+
+Ahora, **¿cómo utilizar el Module Registry de Terraform?**
+
+Linkamos nuestra cuenta de GitHub con Terraform, luedo damos a 'Publish' y se nos propondrán los repositorios git que tengan módulos de terraform creados en Github. Lo publicamos y ahora podríamos referenciarlo del siguiente modo:
+```
+module "ec2" {
+    source  = "jclopeza/ec2-with-eip/module"
+    version = "1.0.3"
+    vpc_id = "${module.vpc.vpc_id}"
+    project_name = "calculadora"
+    environment = "testing"
+    ami = "ami-07d0cf3af28718ef8"
+    instance_type = "t2.micro"
+    key_name = "jcla"
+    subnet_id = "${module.vpc.public_subnets[0]}"
+}
+```
+
+## Variables comunes
+Veamos cómo se suele hacer la configuración de los entornos. Se trata sólo de utilizar un directorio con variables comunes.
